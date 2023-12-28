@@ -1,0 +1,137 @@
+cExp[x_] := If[x < -40, 0, Exp[x]];
+Unprotect[Power];
+Power /: 10^x_ /; x < -20 := 0;
+
+(* nbrLayers includes the input layer -- nbrNodes begins with the \
+number of inputs and ends with 1 *)
+(* The number of nodes list must \
+be inserted between double brackets *)
+
+DefineParameters[nbrLayers0_, {nbrNodes0__}, nbrDataPoints_, mom0_, 
+    lambda0_] /; (Length[nbrNodes0] - 1 == nbrLayers0) := (
+   nbrLayers = nbrLayers0;
+   trainSize = nbrDataPoints;
+   nbrFeatures = nbrNodes0[[1]];
+   nbrNodes = nbrNodes0;
+   mom = mom0;
+   lambda = lambda0;
+   );
+
+InputUniverse[un__] /; (Length[un[[1]]] == nbrFeatures) := 
+  Table[un[[i]], {i, 1, trainSize}];
+
+InputSolution[sol__] := Table[sol[[i]], {i, 1, trainSize}];
+
+CreateWeigths :=
+  
+  Table[Table[
+    Table[RandomChoice[{RandomReal[{-1, -0.1}], 
+       RandomReal[{0.1, 1}]}], {k, 1, nbrNodes[[i + 1]]}], {j, 1, 
+     nbrNodes[[i]]}], {i, 1, nbrLayers}] ;
+
+CreateOuts[universe__] := Block[{outsAux},
+   outsAux = 
+    Table[Table[
+      Table[0, {j, 1, nbrNodes[[i]]}], {i, 1, nbrLayers + 1}], {k, 1, 
+      Length[universe]}];
+   Do[Do[outsAux[[i, 1, j]] = universe[[i, j]], {j, 1, 
+      nbrNodes[[1]]}], {i, 1, Length[universe]}];
+   outsAux
+   ];
+
+(*CreateErrors:=Table[0,{i,1,trainSize}];*)
+
+SetAttributes[UpdateOuts, HoldFirst];
+UpdateOuts[outs__, weigths__, nbrItems_ : trainSize, 
+   FAct0__ : Function[\!\(TraditionalForm\`
+\*FractionBox[\(1\), \(cExp[\(-#\)] + 1\)]\)]] := Block[{FAct},
+   FAct[x_] := \!\(TraditionalForm\`FAct0[x]\);
+   Do[
+    Do[
+     outs[[item, layer, ;;]] = 
+      Evaluate[
+       FAct /@ (outs[[item, layer - 1, ;;]] . 
+          weigths[[layer - 1, ;; , ;;]])],
+     {layer, 2, nbrLayers + 1}],
+    {item, 1, nbrItems(*Length[outs]*)(*trainSize*)}]
+   ];
+
+SetAttributes[UpdateWeigths, HoldAll];
+UpdateWeigths[outs__, weigths__, solution__, delta__, 
+   FAct0__ : Function[\!\(TraditionalForm\`
+\*FractionBox[\(1\), \(cExp[\(-#\)] + 1\)]\)]] := 
+  Block[{errors, EE, GradFAct, FAct, InvFAct, fAux},
+   (* Note that this is GradFAct(f^-1(x)) = f'(y) *)
+   
+   FAct[x_] := \!\(TraditionalForm\`FAct0[x]\);
+   (*InvFAct=InverseFunction[FAct];
+   fAux=(D[FAct[y],y]/.{y\[Rule]InvFAct[x]})//Simplify;
+   GradFAct[x_]=fAux;*)
+   
+   (* Have to hardcode this because of the modified exponential *)
+   
+   GradFAct[x_] := x (1 - x);
+   
+   
+   errors = 
+    outs[[;; , nbrLayers + 1, nbrNodes[[nbrLayers + 1]] ]] - 
+     solution;
+   (*EE = Total@((Abs[#]^2)&/@errors);*)
+   
+   delta[[;; , nbrLayers, 1]] = 
+    Evaluate[errors[[ ;; ]]*GradFAct /@ outs[[;; , nbrLayers + 1, 1]]];
+   Do[
+    Do[
+     (*Do[*)
+     
+     delta[[item, nbrLayers - layer,(*node*);;]] = 
+      Evaluate[
+       GradFAct /@ (outs[[
+           item, (nbrLayers + 1) - layer,(*node*);;]]) weigths[[
+          nbrLayers + 1 - layer,(*node*);; , ;;]] . 
+         delta[[item, nbrLayers + 1 - layer, ;;]]],
+     (*{node,1,nbrNodes[[nbrLayers-
+     layer]]}],*)
+     {item, 1, trainSize}],
+    {layer, 1, nbrLayers - 1}];
+   
+   Do[
+    Do[
+     Do[
+      weigths[[nbrLayers - layer, node1, node2]] = 
+       Evaluate[
+        mom*weigths[[nbrLayers - layer, node1, node2]] -  
+         lambda outs[[;; , (nbrLayers + 1) - 1 - layer, node1]] . 
+           delta[[;; , nbrLayers - layer, node2]]],
+      {node2, 1, nbrNodes[[nbrLayers - layer + 1]]}],
+     {node1, 1, nbrNodes[[nbrLayers - layer]]}],
+    {layer, 0, nbrLayers - 1}];
+   ];
+
+SetAttributes[StartNeuralNetwork, HoldAll];
+StartNeuralNetwork[nbrLayers0_, {nbrNodes0__}, nbrDataPoints_, mom0_, 
+   lambda0_, nbrIterations_, {universe0__}, {solution0__}] := 
+  Block[{universe, solution, outs, delta},
+   DefineParameters[nbrLayers0, {nbrNodes0}, nbrDataPoints, mom0, 
+    lambda0];
+   universe = InputUniverse[universe0];
+   solution = InputSolution[solution0];
+   weigths = CreateWeigths;
+   
+   Do[
+    outs = CreateOuts[universe0];
+    
+    (* Note that delta has one less layer than outs (same as weights) \
+*)
+    delta = Drop[CreateOuts[universe0], None, 1];
+    UpdateOuts[outs, weigths];
+    UpdateWeigths[outs, weigths, solution, delta];
+    , {iter, 1, nbrIterations}];
+   Return[outs[[;; , nbrLayers0 + 1]]]
+   ];
+
+PredictOutcome[{input__}] := Block[{outputs},
+   outputs = CreateOuts[input];
+   UpdateOuts[outputs, weigths, Length[input]];
+   Return[outputs[[;; , nbrLayers + 1]]]
+   ];
